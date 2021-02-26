@@ -11,19 +11,19 @@ class MainWindow(tk.Tk):
         super(MainWindow, self).__init__()
         self.title("Lion Multi-Stream Recorder 1.0")
         self.font = ("helvetica", 10)
-        self.update_delay = 0.1
+        self.update_delay = 0.5
         self.canvas = tk.Canvas(self, width=720, height=555, bg="#555555")
         self.canvas.pack()
         self.resizable(width=False, height=False)
         self.chunk_size = 4096
 
-        self.available_decks = []
         self.control_window = ControlWindow(self)
         self.control_window.frame.place(x=10, y=10)
-        self.deckA = PlayerWindow(self, player_id="A")
-        self.deckB = PlayerWindow(self, player_id="B")
-        self.deckC = PlayerWindow(self, player_id="C")
-        self.deckD = PlayerWindow(self, player_id="D")
+
+        self.deckA = PlayerWindow(root=self, player_id="A")
+        self.deckB = PlayerWindow(root=self, player_id="B")
+        self.deckC = PlayerWindow(root=self, player_id="C")
+        self.deckD = PlayerWindow(root=self, player_id="D")
         y_pos = 120
         spacer = 110
         self.deckA.player_frame.place(x=10, y=y_pos)
@@ -33,36 +33,6 @@ class MainWindow(tk.Tk):
         self.deckC.player_frame.place(x=10, y=y_pos)
         y_pos += spacer
         self.deckD.player_frame.place(x=10, y=y_pos)
-        # self.master_volume_var = tk.StringVar()
-        # self.master_volume_var.set(str(int(self.master_volume*100))+"%")
-        # self.volume_down_button = tk.Button(self, font=self.font, text="-", command=self.master_volume_down)
-        # self.volume_down_button.place(x=10, y=135, width=20, height=20)
-        # self.volume_display_label = tk.Label(self, font=self.font, textvariable=self.master_volume_var)
-        # self.volume_display_label.place(x=30, y=135, width=40, height=20)
-        # self.volume_up_button = tk.Button(self, font=self.font, text="+", command=self.master_volume_up)
-        # self.volume_up_button.place(x=70, y=135, width=20, height=20)
-        # self.load_next_button = tk.Button(self, font=self.font, text="load next", command=self.load_next_in_queue)
-        # self.load_next_button.place(x=100, y=135, width=70, height=20)
-        # self.remove_next_button = tk.Button(self, font=self.font, text="remove next", command=self.remov_nxt_in_queue)
-        # self.remove_next_button.place(x=180, y=135, width=90, height=20)
-        # self.encoder1_options = self.select_encoder(1)
-        # self.encoder1_status_label = tk.Button(self, font=self.font, text="Stream1", command=self.encoder1_options)
-        # self.encoder1_status_label.place(x=600, y=135, width=60, height=20)
-        # self.encoder1_indicator = tk.Label(self, bg="#000000")
-        # self.encoder1_indicator.place(x=665, y=135, width=20, height=20)
-        # self.encoder2_options = self.select_encoder(2)
-        # self.encoder2_status_label = tk.Button(self, font=self.font, text="Stream2", command=self.encoder2_options)
-        # self.encoder2_status_label.place(x=690, y=135, width=60, height=20)
-        # self.encoder2_indicator = tk.Label(self, bg="#000000")
-        # self.encoder2_indicator.place(x=755, y=135, width=20, height=20)
-        # self.encoder_indicators = {"enc1": self.encoder1_indicator, "enc2": self.encoder2_indicator}
-        # self.encoder_buffer = {"A": [], "B": []}
-        # self.encoder_threads = {}
-        # self.log_window = self.LogWindow(self)
-        # self.log_window.log_frame.place(x=10, y=390)
-        # self.encoder_options_window = self.EncoderWindow(self)
-        # self.encoder_options_window.encoder_frame.place(anchor="center", relx=0.5, rely=0.5)
-        # self.initialize = True
 
 
 class ControlWindow:
@@ -80,49 +50,59 @@ class ControlWindow:
         self.record_time_label_var.set("00:00:00")
         self.record_time_label = tk.Label(self.frame, width=7, height=1, textvariable=self.record_time_label_var)
         self.record_time_label.place(x=265, y=12)
-        self.is_recording = False
-        self.record_thread = None
+        self.start_time = time()
+        self.active_encoders = 0
+        self.ui_update_thread = Thread(target=self.ui_update_func, daemon=True)
+        self.ui_update_thread.start()
 
     def start_all(self):
-        if not self.is_recording:
-            self.is_recording = True
-            self.record_thread = Thread(name="recording_thread", target=self.recording_thread, daemon=True)
-            self.record_thread.start()
-        else:
-            print("already recording")
+        players = [self.root.deckA, self.root.deckB, self.root.deckC, self.root.deckD]
+        started_encoders = 0
+        active_encoders = 0
+        for player in players:
+            if player.enabled:
+                if player.encoder.status in ["stopped", "connect_failed", "connect refused"]:
+                    player.encoder.start()
+                    started_encoders += 1
+                else:
+                    print(f"encoder{player.p_id} abort start. status = {player.encoder.status}")
+                    if player.encoder.status in ["recording", "starting"]:
+                        active_encoders += 1
+        print(f"started {started_encoders} encoder{'s' if started_encoders != 1 else ''}")
+        if started_encoders > 0 and active_encoders == 0:
+            self.start_time = time()
+        self.active_encoders = active_encoders
 
     def stop_all(self):
-        if self.is_recording is True:
-            self.is_recording = False
-        else:
-            print("nothing to stop but i didn't check very good")
-
-    def recording_thread(self):
-        start_time = time()
-        interval = 1
         players = [self.root.deckA, self.root.deckB, self.root.deckC, self.root.deckD]
         active_encoders = 0
         for player in players:
-            if player.encoder.encoder_config["enabled"] is True:
-                player.encoder.start()
+            if player.encoder.status != "stopped":
                 active_encoders += 1
-        print(f"started {active_encoders} encoder{'s' if active_encoders != 1 else ''}")
-        while self.is_recording:
-            elapsed = int(time() - start_time)
-            elapsed_hrs = (elapsed // 60) // 60
-            elapsed_min = (elapsed // 60) % 60
-            elapsed_sec = elapsed % 60
-            elapsed_hrs = "0"+str(elapsed_hrs) if elapsed_hrs < 9 else str(elapsed_hrs)
-            elapsed_min = "0"+str(elapsed_min) if elapsed_min < 9 else str(elapsed_min)
-            elapsed_sec = "0"+str(elapsed_sec) if elapsed_sec < 9 else str(elapsed_sec)
-            self.record_time_label_var.set(elapsed_hrs+":"+elapsed_min+":"+elapsed_sec)
-            sleep(interval)
-        active_encoders = 0
-        for player in players:
-            if player.encoder.encoder_thread is not None:
                 player.encoder.stop()
-                active_encoders += 1
         print(f"stopped {active_encoders} encoder{'s' if active_encoders != 1 else ''}")
+        self.active_encoders = active_encoders
+
+    def ui_update_func(self):
+        while True:
+            sleep(self.root.update_delay)
+            actives = 0
+            for player in [self.root.deckA, self.root.deckB, self.root.deckC, self.root.deckD]:
+                player.set_status(text=player.encoder.status)
+                if player.encoder.status != "stopped":
+                    actives += 1
+            if actives > 0:
+                self.record_time_label_var.set(self.get_elapsed_time_string())
+
+    def get_elapsed_time_string(self):
+        elapsed = int(time() - self.start_time)
+        elapsed_hrs = (elapsed // 60) // 60
+        elapsed_min = (elapsed // 60) % 60
+        elapsed_sec = elapsed % 60
+        elapsed_hrs = "0" + str(elapsed_hrs) if elapsed_hrs <= 9 else str(elapsed_hrs)
+        elapsed_min = "0" + str(elapsed_min) if elapsed_min <= 9 else str(elapsed_min)
+        elapsed_sec = "0" + str(elapsed_sec) if elapsed_sec <= 9 else str(elapsed_sec)
+        return elapsed_hrs+":"+elapsed_min+":"+elapsed_sec
 
 
 class PlayerWindow:
@@ -130,34 +110,37 @@ class PlayerWindow:
         self.root = root
         self.font = ("helvetica", 10)
         self.txt_width = 50
-        # self.height = height
-        # self.bd = bd
-        # self.relief = relief
-
         self.encoder = Encoder(self, player_id)
+        self.enabled = self.encoder.encoder_config["enabled"]
 
-        self.player_id = player_id
+        self.p_id = player_id
         self.player_frame = tk.Frame(root, width=width, height=height, bd=bd, relief=relief)
 
         self.input_text_var = tk.StringVar()
         self.input_text_var.set(self.encoder.encoder_config["input_url"])
-        self.input_text_label = tk.Entry(self.player_frame, width=self.txt_width, textvariable=self.input_text_var)
-        self.input_text_label.place(x=10, y=10)
-        self.set_input_button = tk.Button(self.player_frame, font=self.font, text="SET", command=self.set_input)
-        self.set_input_button.place(x=320, y=10, width=40, height=20)
+        self.input_text_label = tk.Entry(self.player_frame, font=self.font, width=self.txt_width,
+                                         textvariable=self.input_text_var)
+        self.input_text_label.place(x=10, y=5)
 
         self.output_text_var = tk.StringVar()
         self.output_text_var.set(self.encoder.encoder_config["output_filename"])
-        self.output_text_label = tk.Entry(self.player_frame, width=self.txt_width, textvariable=self.output_text_var)
-        self.output_text_label.place(x=10, y=35)
-        self.set_output_button = tk.Button(self.player_frame, font=self.font, text="SET", command=self.set_output)
-        self.set_output_button.place(x=320, y=35, width=40, height=20)
+        self.output_text_label = tk.Entry(self.player_frame, font=self.font, width=self.txt_width,
+                                          textvariable=self.output_text_var)
+        self.output_text_label.place(x=10, y=30)
+
+        self.metadata_label_var = tk.StringVar()
+        self.metadata_label = tk.Label(self.player_frame, font=self.font, width=43, bg="#FFFFFF",
+                                       textvariable=self.metadata_label_var)
+        self.metadata_label.place(x=10, y=55)
+
+        self.save_config_button = tk.Button(self.player_frame, font=self.font, text="SAVE", command=self.save_config)
+        self.save_config_button.place(x=370, y=6, width=40, height=20)
 
         self.enable_button_var = tk.BooleanVar()
         self.enable_button_var.set(self.encoder.encoder_config["enabled"])
         self.enable_button = tk.Checkbutton(self.player_frame, font=self.font,
                                             text="ENABLED", variable=self.enable_button_var, command=self.set_enable)
-        self.enable_button.place(x=365, y=10)
+        self.enable_button.place(x=420, y=4)
 
         self.status_label_var = tk.StringVar()
         self.status_label_var.set("STATUS")
@@ -165,16 +148,15 @@ class PlayerWindow:
                                      textvariable=self.status_label_var, bg="#FF0000")
         self.status_label.place(x=370, y=35)
 
-    def set_input(self):
-        self.encoder.encoder_config["input_url"] = self.input_text_var.get()
-        self.encoder.save_encoder()
-
-    def set_output(self):
-        self.encoder.encoder_config["output_filename"] = self.output_text_var.get()
-        self.encoder.save_encoder()
-
     def set_enable(self):
-        self.encoder.encoder_config["enabled"] = self.enable_button_var.get()
+        self.enabled = self.enable_button_var.get()
+        self.save_config()
+
+    def save_config(self):
+        url = self.input_text_var.get()
+        filename = self.output_text_var.get()
+        en = self.enabled
+        self.encoder.encoder_config = {"input_url": url, "output_filename": filename, "enabled": en}
         self.encoder.save_encoder()
 
     def set_status(self, text=None, fg=None, bg=None):
@@ -184,6 +166,14 @@ class PlayerWindow:
             self.status_label.configure(fg=fg)
         if bg is not None:
             self.status_label.configure(bg=bg)
+        elif text == "stopped":
+            self.status_label.configure(bg="#FF0000")
+        elif text == "stopping" or text == "starting":
+            self.status_label.configure(bg="#FFFF00")
+        elif text == "recording":
+            self.status_label.configure(bg="#00FF00")
+        else:
+            self.status_label.configure(bg="#8888FF")
 
 
 class Encoder:
@@ -192,9 +182,11 @@ class Encoder:
         self.player_window = player_window
         self.input_url = input_url
         self.output_filename = output_filename
-        self.encoder_config = self.get_encoder_config(p_id, input_url, output_filename)
+        self.encoder_config = None
+        self.get_encoder_config(p_id, input_url, output_filename)
         self.encoder_thread = None
-        self.stream_input_chunk_size = 4096  # 2048 default
+        self.status = "stopped"
+        self.stream_input_chunk_size = 1024  # 2048 default
         self.bit_rate = "64"
 
     def get_encoder_config(self, p_id, url, filename):
@@ -204,81 +196,71 @@ class Encoder:
             print(f"output file {self.output_filename} error\n{e}")
             config = {"input_url": url, "output_filename": filename, "enabled": False}
             self.save_encoder(config)
-        return config
-
-    def set_encoder_config(self, url, filename):
-        self.encoder_config = {"input_url": url, "output_filename": filename}
+        self.encoder_config = config
 
     def save_encoder(self, config=None):
-        if config is None:
-            config = self.encoder_config
-        pickle.dump(config, open(self.p_id, "wb"))
-        # print(f"encoder {self.p_id} saved")
+        if config is not None:
+            self.encoder_config = config
+        pickle.dump(self.encoder_config, open(self.p_id, "wb"))
 
     def start(self):
         self.encoder_thread = Thread(target=self.play_stream, daemon=True)
         self.encoder_thread.start()
-        # print(f"encoder{self.p_id} started")
 
     def stop(self):
-        conditions = ["stopped", "connect failed", "connect refused"]
-        if self.player_window.status_label_var.get() not in conditions:
-            self.player_window.set_status(text="stopping", fg="#000000", bg="#FFFF00")
-            # print(f"encoder{self.p_id} stopping")
+        condition = self.status
+        if condition in ["recording", "starting"]:
+            self.status = "stopping"
         else:
-            pass
-            # print(f"encoder{self.p_id} was already stopped")
+            print(f"encoder{self.p_id} was {condition} so not stopped")
 
     def play_stream(self):
         path = self.encoder_config["input_url"]
         output_file = self.encoder_config["output_filename"]
-        self.player_window.set_status(text="starting", fg="#000000", bg="#FFFF00")
-
+        self.status = "starting"
         headers = {"user-agent": "LionMultiRecorder1.0", "Icy-MetaData": "1"}
         try:
             resp = requests.get(path, headers=headers, stream=True)
         except requests.exceptions.ConnectionError:
             print("Could not connect to", path)
-            self.player_window.set_status(text="connect failed", fg="#FFFFFF", bg="#FF0000")
+            self.status = "connect failed"
             return
         if resp.status_code != 200:
             print(f"encoder{self.p_id} server returned response code", resp.status_code)
             resp.close()
-            self.player_window.set_status(text="connect refused", fg="#FFFFFF", bg="#FF0000")
+            self.status = "connect refused"
             return
         elif "icy-name" in resp.headers.keys():
-            self.player_window.input_text_var.set(resp.headers["icy-name"])
+            self.player_window.metadata_label_var.set(resp.headers["icy-name"])
         metaint_header = "icy-metaint"
         if metaint_header in resp.headers.keys():
             metaint_value = int(resp.headers[metaint_header])
         else:
             metaint_value = 0
-        connected = True
         data = resp.iter_content()
         pad_byte = b'\x00'.decode()
-        ext_index = str(output_file).find(".")
         bit_rate_string = self.bit_rate+"k"
+
         final_filename = str(int(time()))+"_"+output_file
+        # final_filename = "test_"+output_file
         ff_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", "pipe:",
                                     "-f", output_file[-3:], "-ab", bit_rate_string, final_filename],
                                    stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        # stdout_thread = Thread(target=self.read_stdout, args=[ff_proc.stdout], daemon=True)
         stderr_thread = Thread(target=self.read_stderr, args=[ff_proc.stderr], daemon=True)
-        # stdout_thread.start()
         stderr_thread.start()
         stream_output = bytes()
-        self.player_window.set_status(text="recording", fg="#000000", bg="#00FF00")
 
-        while connected and (self.player_window.status_label_var.get() != "stopping" and
-                             self.player_window.status_label_var.get() != "stopped"):
+        self.status = "recording"
+        connected = True
+        while connected is True and self.status == "recording":
             try:
-                for _ in range(metaint_value if metaint_value > 0 else 1):
+                for _ in range(metaint_value if metaint_value > 0 else self.stream_input_chunk_size):
                     stream_output += next(data)
-                    if len(stream_output) == self.stream_input_chunk_size:
+                    if len(stream_output) >= self.stream_input_chunk_size:
                         ff_proc.stdin.write(stream_output)
                         stream_output = bytes()
-                        # sleep(0.005)
+                        # if self.p_id == "A":
+                        #     print(f"encoder{self.p_id} writing at {int(time())}")
                 if metaint_value > 0:
                     d = next(data)
                     meta_counter_end = int.from_bytes(d, byteorder="little")
@@ -291,13 +273,14 @@ class Encoder:
                     decoded = decoded.rstrip(pad_byte)
                     if decoded != "":
                         song_title = decoded
-                        self.player_window.input_text_var.set(song_title[13:].rstrip("\';"))
+                        self.player_window.metadata_label_var.set(song_title[13:].rstrip("\';"))
             except StopIteration:
                 connected = False
                 print("encoder{} lost connection to {}".format(self.p_id, path))
-        self.player_window.input_text_var.set(self.encoder_config["input_url"])
-        self.player_window.set_status(text="stopped", fg="#000000", bg="#FF0000")
-        # print(f"encoder{self.p_id} closing stream...")
+
+        # self.player_window.input_text_var.set(self.encoder_config["input_url"])
+        self.status = "stopped"
+        print(f"encoder{self.p_id} closing stream...")
         ff_proc.kill()
         resp.close()
         # stdout_thread.join()
@@ -306,8 +289,11 @@ class Encoder:
 
     def read_stderr(self, err):
         # print(f"encoder{self.p_id} error thread opened")
-        while self.player_window.status_label_var.get() != "stopped":
+        while self.status in ["recording", "starting"]:
             err.readline().decode().rstrip("\n")
+            # err_output = err.readline().decode().rstrip("\n")
+            # if self.p_id == "A":
+            #     print(f"encoder{self.p_id} {err_output}")
         # print(f"encoder{self.p_id} error thread closed")
 
 
@@ -315,14 +301,14 @@ if __name__ == '__main__':
     app_window = MainWindow()
     app_window.mainloop()
 
-# hot917fm
+# hot 917 fm
 # https://stream.zeno.fm/643udufw1ceuv.mp3
 
-# star106
+# star 106
 # http://184.154.43.106:8384/stream
 
-# 100jamz
+# 100 jamz
 # https://ice66.securenetsystems.net/100JAMZ?playSessionID=5F5C483D-CEBC-810A-7E7DBE3C57C03DF2
 
-# guardianradio
+# guardian radio
 # http://tngrgroup.streamcomedia.com:8788/guardianradio
